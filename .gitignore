@@ -1,0 +1,40 @@
+# --- Maven ---
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+# We keep the wrapper config but ignore the heavy binary jar
+.mvn/wrapper/maven-wrapper.jar
+
+# --- IDE (IntelliJ) ---
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+gen/
+
+# --- IDE (VS Code & Others) ---
+.vscode/
+.classpath
+.project
+.settings/
+.factorypath
+
+# --- Secrets & Config (CRITICAL) ---
+src/main/resources/application-local.properties
+.env
+.env.local
+*.jks
+*.p12
+*.key
+
+# --- System Files ---
+.DS_Store
+Thumbs.db
+*.log
