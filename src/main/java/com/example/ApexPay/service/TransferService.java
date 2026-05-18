@@ -82,11 +82,14 @@ public class TransferService {
     }
 
     private void createAuditLog(UUID entityId, AuditAction action, String prevState, String newState) {
-        AuditLog log = new AuditLog();
-        log.setEntityId(entityId);
-        log.setAction(action);
-        log.setPreviousState(prevState);
-        log.setNewState(newState);
+        // Using the Builder pattern since setters are locked down
+        AuditLog log = AuditLog.builder()
+                .entityId(entityId)
+                .action(action)
+                .previousState(prevState)
+                .newState(newState)
+                .build();
+
         auditLogRepository.save(log);
     }
 }
