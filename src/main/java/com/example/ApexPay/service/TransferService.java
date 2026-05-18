@@ -23,6 +23,7 @@ public class TransferService {
     private final AccountRepository accountRepository;
     private final TransactionRepository transactionRepository;
     private final AuditLogRepository auditLogRepository;
+    private final org.springframework.amqp.rabbit.core.RabbitTemplate rabbitTemplate;
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Transaction transferFunds(UUID sourceId, UUID destinationId, BigDecimal amount) {
@@ -77,6 +78,14 @@ public class TransferService {
         // 10. Write the Audit Logs
         createAuditLog(sourceId, AuditAction.DEBIT, sourcePrevState, "{\"balance\":\"" + source.getBalance() + "\"}");
         createAuditLog(destinationId, AuditAction.CREDIT, destPrevState, "{\"balance\":\"" + destination.getBalance() + "\"}");
+        // 11. Broadcast the Event to RabbitMQ
+        // We use "transaction.success.transfer" as the routing key.
+        // Our AI Queue listens to "transaction.success.#", so it will catch this!
+        rabbitTemplate.convertAndSend(
+                "apexpay.events",
+                "transaction.success.transfer",
+                savedTransaction
+        );
 
         return savedTransaction;
     }
