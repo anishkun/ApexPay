@@ -1,9 +1,10 @@
 package com.example.ApexPay.repository;
 
-import com.example.ApexPay.entity.Account;
+import com.example.ApexPay.entity.Transaction; // Make sure this is imported
 import org.springframework.data.jpa.repository.JpaRepository;
+
 import java.util.UUID;
 
-public interface TransactionRepository extends JpaRepository<Account, UUID> {
-    // Spring Data JPA will automatically implement this interface
+// CHANGE Account TO Transaction HERE
+public interface TransactionRepository extends JpaRepository<Transaction, UUID> {
 }
