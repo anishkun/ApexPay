@@ -24,7 +24,8 @@ public class TransferService {
     private final AccountRepository accountRepository;
     private final TransactionRepository transactionRepository;
     private final AuditLogRepository auditLogRepository;
-    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
+    private final com.example.ApexPay.repository.OutboxEventRepository outboxEventRepository; // ADD THIS
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Transaction transferFunds(UUID sourceId, UUID destinationId, BigDecimal amount) {
@@ -80,15 +81,29 @@ public class TransferService {
         createAuditLog(sourceId, AuditAction.DEBIT, sourcePrevState, "{\"balance\":\"" + source.getBalance() + "\"}");
         createAuditLog(destinationId, AuditAction.CREDIT, destPrevState, "{\"balance\":\"" + destination.getBalance() + "\"}");
 
-        // 11. Broadcast the internal Spring Event
-        // It will wait in memory until the database commit is successful
-        TransactionSuccessEvent event = new TransactionSuccessEvent(
-                savedTransaction.getId(),
-                sourceId,
-                destinationId,
-                amount
-        );
-        eventPublisher.publishEvent(event);
+        // 11. The Outbox Pattern: Save the event to the local DB
+        try {
+            TransactionSuccessEvent eventPayload = new TransactionSuccessEvent(
+                    savedTransaction.getId(),
+                    sourceId,
+                    destinationId,
+                    amount
+            );
+
+            OutboxEvent outboxEvent = OutboxEvent.builder()
+                    .aggregateType("Transaction")
+                    .aggregateId(savedTransaction.getId())
+                    .eventType("TransactionSuccessEvent")
+                    .payload(objectMapper.writeValueAsString(eventPayload)) // Convert to JSON
+                    .processed(false)
+                    .build();
+
+            outboxEventRepository.save(outboxEvent);
+
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            // If we can't create the JSON, we intentionally crash to roll back the whole transaction
+            throw new RuntimeException("Failed to serialize outbox event payload", e);
+        }
 
         return savedTransaction;
     }
