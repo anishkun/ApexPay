@@ -15,7 +15,7 @@ ApexPay is an enterprise-grade backend engine designed to process financial tran
 
 ## 🛠️ Tech Stack
 
-* **Language:** Java
+* **Language:** Java 
 * **Framework:** Spring Boot 3.x (Web, Data JPA, AMQP, Validation)
 * **Database:** PostgreSQL 15+ (Running in Docker)
 * **Message Broker:** RabbitMQ 3-Management (Running in Docker)
@@ -37,7 +37,7 @@ src/main/java/com/example/ApexPay
 
 ## 💻 Local Setup & Running
 1. Start Infrastructure (Docker)
-   Ensure Docker is running, then spin up PostgreSQL and RabbitMQ:
+Ensure Docker is running, then spin up PostgreSQL and RabbitMQ:
 
 ```text
 # Start PostgreSQL
@@ -49,7 +49,7 @@ docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
 (RabbitMQ Dashboard available at http://localhost:15672 | guest/guest)
 
 2. Configure Database Triggers
-   Before running the application, access the PostgreSQL instance and apply the immutability trigger for the audit logs:
+Before running the application, access the PostgreSQL instance and apply the immutability trigger for the audit logs:
 
 ```text
 CREATE OR REPLACE FUNCTION prevent_audit_log_modification() RETURNS TRIGGER AS $$
@@ -63,7 +63,7 @@ BEFORE UPDATE OR DELETE ON audit_logs
 FOR EACH ROW EXECUTE FUNCTION prevent_audit_log_modification();
 ```
 3. Run the Application
-   Start the Spring Boot server using Maven or your IDE. The app will expose endpoints on localhost:8080.
+Start the Spring Boot server using Maven or your IDE. The app will expose endpoints on localhost:8080.
 ## 📖 API Documentation
 1. Create an Account
 ```text
@@ -77,7 +77,7 @@ Content-Type: application/json
 }
 ```
 2. Execute an Idempotent Transfer
-   Transfers funds safely between two accounts. If the Idempotency-Key has been seen before, it returns the existing transaction without deducting funds twice.
+Transfers funds safely between two accounts. If the Idempotency-Key has been seen before, it returns the existing transaction without deducting funds twice.
 
 ```text
 POST /api/v1/transfers
