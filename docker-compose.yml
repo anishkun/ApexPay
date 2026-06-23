@@ -1,0 +1,24 @@
+# Local infrastructure for running ApexPay (not needed for `mvn test`).
+# Start with:  docker compose up -d
+services:
+  postgres:
+    image: postgres:16
+    container_name: apexpay-postgres
+    environment:
+      POSTGRES_DB: ApexDB
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - apexpay-pgdata:/var/lib/postgresql/data
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: apexpay-rabbitmq
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # Management UI (guest/guest)
+
+volumes:
+  apexpay-pgdata:

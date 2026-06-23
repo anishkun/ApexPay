@@ -15,11 +15,12 @@ ApexPay is an enterprise-grade backend engine designed to process financial tran
 
 ## 🛠️ Tech Stack
 
-* **Language:** Java 
-* **Framework:** Spring Boot 3.x (Web, Data JPA, AMQP, Validation)
-* **Database:** PostgreSQL 15+ (Running in Docker)
+* **Language:** Java 21
+* **Framework:** Spring Boot 3.5.x (Web, Data JPA, AMQP, Validation)
+* **Database:** PostgreSQL 16 (Running in Docker); H2 in-memory for tests
 * **Message Broker:** RabbitMQ 3-Management (Running in Docker)
 * **JSON Processing:** Jackson ObjectMapper
+* **Testing:** JUnit 5, Spring Boot Test, Testcontainers (RabbitMQ)
 * **Tooling:** Lombok, Maven
 
 ## 📂 Project Structure
@@ -35,21 +36,46 @@ src/main/java/com/example/ApexPay
  └── worker/           # Background Cron Jobs (OutboxRelayWorker)
 ```
 
-## 💻 Local Setup & Running
-1. Start Infrastructure (Docker)
-Ensure Docker is running, then spin up PostgreSQL and RabbitMQ:
+## ✅ Build & Test
 
-```text
-# Start PostgreSQL
-docker run -d --name my-postgres -e POSTGRES_PASSWORD=password -p 5432:5432 postgres
+The test suite is self-contained — it needs **no external infrastructure**:
 
-# Start RabbitMQ with Management UI
-docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
+```sh
+mvn test
 ```
-(RabbitMQ Dashboard available at http://localhost:15672 | guest/guest)
 
-2. Configure Database Triggers
-Before running the application, access the PostgreSQL instance and apply the immutability trigger for the audit logs:
+* Application logic runs against an in-memory **H2** database, so Postgres is not required.
+* The outbox relay logic is covered by a deterministic unit test with a mocked broker.
+* A **Testcontainers** integration test (`OutboxRabbitIntegrationTest`) spins up a throwaway
+  RabbitMQ broker in Docker and verifies the full outbox → exchange → queue delivery path.
+  It **auto-skips** when no Docker daemon is available, so `mvn test` stays green offline.
+
+Build a runnable jar with `mvn clean package` (jar lands in `target/`).
+
+## 💻 Local Setup & Running
+
+> Running the live application (unlike the tests) requires Postgres and RabbitMQ.
+
+1. Start Infrastructure (Docker)
+
+The quickest way is the bundled compose file:
+
+```sh
+docker compose up -d
+```
+
+This starts PostgreSQL (`ApexDB`, user `postgres` / `password`) and RabbitMQ with the
+management UI at http://localhost:15672 (guest/guest). Equivalent manual commands:
+
+```sh
+docker run -d --name apexpay-postgres -e POSTGRES_DB=ApexDB -e POSTGRES_PASSWORD=password -p 5432:5432 postgres:16
+docker run -d --name apexpay-rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3.13-management
+```
+
+2. Configure Database Triggers (optional, for tamper-proofing)
+For a production-grade immutable audit trail, access the PostgreSQL instance and apply the
+trigger below. The application also enforces immutability at the code tier (no setters), so
+this step is optional for a local run:
 
 ```text
 CREATE OR REPLACE FUNCTION prevent_audit_log_modification() RETURNS TRIGGER AS $$
@@ -63,9 +89,26 @@ BEFORE UPDATE OR DELETE ON audit_logs
 FOR EACH ROW EXECUTE FUNCTION prevent_audit_log_modification();
 ```
 3. Run the Application
-Start the Spring Boot server using Maven or your IDE. The app will expose endpoints on localhost:8080.
+
+```sh
+mvn spring-boot:run
+```
+
+The app exposes endpoints on `localhost:8080`. The `OutboxRelayWorker` polls the outbox table
+every 5 seconds and publishes pending events to RabbitMQ; `RabbitMQConsumer` logs anything that
+lands on the AI queue.
+
 ## 📖 API Documentation
-1. Create an Account
+
+| Method | Path | Description |
+| ------ | ---- | ----------- |
+| `POST` | `/api/v1/accounts` | Open an account (also writes a `CREATED` audit entry) |
+| `GET`  | `/api/v1/accounts/{id}` | Fetch an account / check its balance |
+| `POST` | `/api/v1/transfers` | Execute an idempotent transfer (requires `Idempotency-Key` header) |
+| `GET`  | `/api/v1/transfers/{id}` | Query a payment (transaction) by id |
+| `GET`  | `/api/v1/audit-logs/{entityId}` | List the immutable audit entries for an account |
+
+### 1. Create an Account → `201 Created`
 ```text
 POST /api/v1/accounts
 Content-Type: application/json
@@ -76,8 +119,10 @@ Content-Type: application/json
     "currency": "USD"
 }
 ```
-2. Execute an Idempotent Transfer
-Transfers funds safely between two accounts. If the Idempotency-Key has been seen before, it returns the existing transaction without deducting funds twice.
+
+### 2. Execute an Idempotent Transfer → `200 OK`
+Transfers funds safely between two accounts. If the `Idempotency-Key` has been seen before, the
+existing transaction is returned without deducting funds twice.
 
 ```text
 POST /api/v1/transfers
@@ -90,7 +135,37 @@ Idempotency-Key: req-unique-id-123
     "amount": 100.00
 }
 ```
-3. Check Account Balance
+
+### 3. Query a Payment → `200 OK`
+```text
+GET /api/v1/transfers/<TRANSACTION_UUID>
+```
+
+### 4. Check Account Balance → `200 OK`
 ```text
 GET /api/v1/accounts/<ACCOUNT_UUID>
+```
+
+### 5. Read the Audit Trail → `200 OK`
+```text
+GET /api/v1/audit-logs/<ACCOUNT_UUID>
+```
+
+### Error Model
+Errors return a consistent JSON body with the appropriate HTTP status:
+
+| Status | When |
+| ------ | ---- |
+| `400 Bad Request` | Missing `Idempotency-Key` header or request-body validation failure |
+| `404 Not Found` | Unknown account or transaction |
+| `422 Unprocessable Entity` | Insufficient funds in the source account |
+
+```json
+{
+  "timestamp": "2026-06-22T21:00:00",
+  "status": 422,
+  "error": "Unprocessable Entity",
+  "message": "Insufficient funds in the source account",
+  "fieldErrors": null
+}
 ```
