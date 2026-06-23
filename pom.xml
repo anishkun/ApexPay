@@ -45,6 +45,18 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- Schema migrations. flyway-database-postgresql is required for
+             Postgres on Flyway 10+/Spring Boot 3.5. Versions are managed by
+             the Spring Boot parent. -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-amqp</artifactId>
