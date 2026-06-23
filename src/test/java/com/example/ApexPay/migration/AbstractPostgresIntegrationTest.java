@@ -4,8 +4,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
@@ -30,9 +30,29 @@ import org.testcontainers.utility.DockerImageName;
 @Testcontainers(disabledWithoutDocker = true)
 public abstract class AbstractPostgresIntegrationTest {
 
-    @Container
+    /**
+     * <b>Singleton container</b> (manually started, deliberately NOT managed by the
+     * {@code @Container} JUnit lifecycle). When more than one test class extends this
+     * base, the per-class {@code @Container} lifecycle would stop the container after
+     * the first class finished, while Spring's cached application context (with its
+     * Hikari pool still pointed at that now-dead container) gets reused by the next
+     * class — yielding "Connection refused". Starting it once in a static initializer
+     * keeps a single Postgres up for the whole JVM, matching the single cached context
+     * the shared {@link DynamicPropertySource} values resolve to. The container is
+     * reaped by Testcontainers' Ryuk at JVM exit.
+     */
     static final PostgreSQLContainer<?> POSTGRES =
             new PostgreSQLContainer<>(DockerImageName.parse("postgres:16-alpine"));
+
+    static {
+        // Only start when Docker is reachable. On a Docker-less machine the
+        // @Testcontainers(disabledWithoutDocker = true) extension self-skips every
+        // subclass, but this static initializer runs at class-load time (before the
+        // skip), so we must guard it to avoid throwing there.
+        if (DockerClientFactory.instance().isDockerAvailable()) {
+            POSTGRES.start();
+        }
+    }
 
     @DynamicPropertySource
     static void datasourceProperties(DynamicPropertyRegistry registry) {
