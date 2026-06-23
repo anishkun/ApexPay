@@ -1,5 +1,6 @@
 package com.example.ApexPay.exception;
 
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -39,6 +40,17 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(InsufficientFundsException.class)
     public ResponseEntity<ErrorResponse> handleInsufficientFunds(InsufficientFundsException ex) {
         return build(HttpStatus.UNPROCESSABLE_ENTITY, ex.getMessage(), null);
+    }
+
+    /**
+     * A concurrent update lost the optimistic-lock (@Version) race and retries were
+     * exhausted. This is a transient conflict, not a server fault, so we return
+     * 409 Conflict instead of a bare 500 — the caller may safely retry.
+     */
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ResponseEntity<ErrorResponse> handleOptimisticLock(OptimisticLockingFailureException ex) {
+        return build(HttpStatus.CONFLICT,
+                "The account was modified concurrently; please retry the request.", null);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

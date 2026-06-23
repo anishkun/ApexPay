@@ -27,6 +27,27 @@ public class TransferService {
     private final com.example.ApexPay.repository.OutboxEventRepository outboxEventRepository; // ADD THIS
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
+    /**
+     * Atomic dual-write guarantee.
+     *
+     * <p>Everything in this method runs inside a SINGLE {@code @Transactional}
+     * boundary: the balance debit/credit, the {@code Transaction} record, the two
+     * {@code AuditLog} rows, AND the {@code OutboxEvent} row all commit together or
+     * roll back together. The outbox row is the ONLY "publish" side-effect we take
+     * here — we deliberately do NOT touch RabbitMQ (or any broker) inside this
+     * transaction. Broadcasting the event is the relay's job, which reads committed
+     * outbox rows and publishes them AFTER this transaction commits
+     * ({@code OutboxRelayService}). This keeps the business state and the
+     * intent-to-publish perfectly consistent: if the commit fails, no event is ever
+     * relayed; if it succeeds, the event is durably queued for at-least-once delivery.
+     *
+     * <p>Concurrency control here is PESSIMISTIC: both accounts are locked
+     * {@code FOR UPDATE} (ordered by UUID to avoid deadlock), which serializes
+     * concurrent transfers touching the same account. The {@code @Version} optimistic
+     * lock on {@link com.example.ApexPay.entity.Account} is the secondary safety net
+     * (see {@code IdempotentTransferService} for where the optimistic-lock failure is
+     * caught and retried).
+     */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Transaction transferFunds(UUID sourceId, UUID destinationId, BigDecimal amount) {
 
