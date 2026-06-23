@@ -62,6 +62,14 @@
             <artifactId>spring-boot-starter-amqp</artifactId>
         </dependency>
 
+        <!-- Bounded retry + exponential backoff for the @RabbitListener container
+             (consumer-side poison-message handling). spring-amqp's
+             RetryInterceptorBuilder delegates to spring-retry. -->
+        <dependency>
+            <groupId>org.springframework.retry</groupId>
+            <artifactId>spring-retry</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
