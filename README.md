@@ -102,3 +102,62 @@ Idempotency-Key: req-unique-id-123
 ```text
 GET /api/v1/accounts/<ACCOUNT_UUID>
 ```
+
+## 🔒 Production Hardening / Operations
+
+This section covers the operational surface added during production hardening. All of it is broker-free testable (`.\mvnw.cmd test` runs 25 tests against H2 with a mocked broker — no live Postgres/RabbitMQ required).
+
+### Required environment variables
+All connection settings, credentials, and toggles are read from the environment. See [`.env.example`](.env.example) for the authoritative, commented list. No production secrets are committed; `.env` is gitignored. Copy it and fill in real values:
+
+```text
+cp .env.example .env   # then edit .env
+```
+
+Groups: `DB_*` (PostgreSQL), `RABBITMQ_*` (broker), `API_*`/`ACTUATOR_*` (Basic-auth credentials), `LOG_FORMAT`, `TRACE_SAMPLING`/`TRACING_EXPORT_ENABLED`/`OTLP_ENDPOINT` (tracing), `DDL_AUTO`/`SHOW_SQL` (JPA). Defaults are local/dev-only and must be overridden in production.
+
+### Security model (HTTP Basic)
+The payment API and sensitive actuator endpoints are protected by Spring Security HTTP Basic (stateless: CSRF disabled, no HTTP session). Two in-memory users are seeded from environment variables and BCrypt-encoded at startup — no password hashes are committed and passwords are never logged.
+
+| User | Env vars | Roles | Can access |
+|------|----------|-------|-----------|
+| API caller | `API_USER` / `API_PASSWORD` | `ROLE_USER` | `/api/v1/**` |
+| Ops caller | `ACTUATOR_USER` / `ACTUATOR_PASSWORD` | `ROLE_ACTUATOR` + `ROLE_USER` | `/actuator/prometheus`, `/actuator/metrics/**`, plus everything the API caller can reach |
+
+**CHANGE IN PRODUCTION:** the `changeit` defaults exist only for local/dev/test. Real deployments MUST override all four credential env vars.
+
+### Actuator endpoints
+Only `health,info,prometheus,metrics` are exposed. Access split:
+
+| Endpoint | Auth | Notes |
+|----------|------|-------|
+| `/actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness` | Public | Kubernetes/orchestrator probes. Readiness = `readinessState` + `db` only (broker outages are tolerated by the outbox pattern). Health details shown only `when-authorized`. |
+| `/actuator/info` | Public | |
+| `/actuator/prometheus`, `/actuator/metrics/**` | `ROLE_ACTUATOR` | Ops-only. |
+
+### Metrics / Prometheus scraping
+Micrometer exports metrics in Prometheus format at `GET /actuator/prometheus`. Configure your Prometheus job to scrape it with the ops credentials, e.g.:
+
+```yaml
+scrape_configs:
+  - job_name: apexpay
+    metrics_path: /actuator/prometheus
+    basic_auth:
+      username: ops        # ACTUATOR_USER
+      password: <secret>   # ACTUATOR_PASSWORD
+    static_configs:
+      - targets: ['apexpay:8080']
+```
+Custom metrics cover the outbox relay worker and the RabbitMQ consumer alongside the JVM/HTTP defaults.
+
+### Correlation IDs & distributed tracing
+* **Correlation IDs:** every HTTP request gets a correlation ID (taken from the inbound `X-Correlation-Id` header, or generated if absent) that is echoed back on the response `X-Correlation-Id` header, placed in the logging MDC (`correlationId`), and propagated across the broker hop via the `x-correlation-id` AMQP header — so a single business flow is traceable across API, outbox relay, and consumer.
+* **Structured logs:** `LOG_FORMAT=ecs` (default) emits ECS JSON with the correlation ID and traceId/spanId on every line; set `LOG_FORMAT=` (empty) for plain text in local dev.
+* **Tracing:** Micrometer Tracing + the OpenTelemetry bridge populate traceId/spanId automatically. Span export is OFF by default (`TRACING_EXPORT_ENABLED=false`) — traces stay in-process but still appear in logs. To ship spans to a collector, set `TRACING_EXPORT_ENABLED=true` and point `OTLP_ENDPOINT` at your OTLP HTTP traces endpoint (e.g. `http://collector:4318/v1/traces`). Sampling is controlled by `TRACE_SAMPLING` (0.0–1.0).
+
+### Dependency / vulnerability hygiene
+All dependency versions are managed by the Spring Boot 3.5.13 parent BOM (no hardcoded versions, snapshots, or RCs in `pom.xml`). Test-only dependencies (`h2`, `spring-security-test`, `spring-rabbit-test`) are scoped `test` and do not ship in the runtime jar. To run an on-demand vulnerability scan (needs network access to the NVD, intentionally not wired into the build):
+
+```text
+mvn org.owasp:dependency-check-maven:check
+```
