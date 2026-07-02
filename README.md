@@ -48,7 +48,15 @@ docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
 ```
 (RabbitMQ Dashboard available at http://localhost:15672 | guest/guest)
 
-2. Configure Database Triggers
+2. Configure Environment Variables
+All connection settings and credentials are read from environment variables (see `.env.example` for the full list). For local dev the defaults match the Docker setup above — you only need to set the database password:
+
+```text
+DB_PASSWORD=password
+```
+No plaintext production secrets are committed; production deployments must override `DB_*` and `RABBITMQ_*` via the environment.
+
+3. Configure Database Triggers
 Before running the application, access the PostgreSQL instance and apply the immutability trigger for the audit logs:
 
 ```text
@@ -62,7 +70,7 @@ CREATE TRIGGER enforce_append_only_audit_logs
 BEFORE UPDATE OR DELETE ON audit_logs
 FOR EACH ROW EXECUTE FUNCTION prevent_audit_log_modification();
 ```
-3. Run the Application
+4. Run the Application
 Start the Spring Boot server using Maven or your IDE. The app will expose endpoints on localhost:8080.
 ## 📖 API Documentation
 1. Create an Account
