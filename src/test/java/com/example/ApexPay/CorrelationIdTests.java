@@ -103,6 +103,23 @@ class CorrelationIdTests {
 	}
 
 	@Test
+	void correlationIdIsEchoedEvenOnUnauthorizedResponse() {
+		// The CorrelationIdFilter (HIGHEST_PRECEDENCE servlet filter) runs before the
+		// Spring Security chain, so even a rejected (401) request carries the ID back --
+		// crucial for correlating auth failures in the logs.
+		HttpHeaders headers = new HttpHeaders();
+		headers.set(CorrelationIdFilter.HTTP_HEADER, "unauth-correlation");
+
+		ResponseEntity<String> response = restTemplate.exchange(
+				"/api/v1/transfers", org.springframework.http.HttpMethod.POST,
+				new HttpEntity<>("{}", headers), String.class);
+
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+		assertThat(response.getHeaders().getFirst(CorrelationIdFilter.HTTP_HEADER))
+				.isEqualTo("unauth-correlation");
+	}
+
+	@Test
 	void correlationIdFlowsFromHttpRequestThroughOutboxToAmqpHeader() throws Exception {
 		// Arrange: two funded accounts
 		Account source = newAccount("1000.00");
@@ -118,8 +135,9 @@ class CorrelationIdTests {
 				{"sourceAccountId":"%s","destinationAccountId":"%s","amount":25.00}
 				""".formatted(source.getId(), destination.getId());
 
-		ResponseEntity<String> response = restTemplate.postForEntity(
-				"/api/v1/transfers", new HttpEntity<>(body, headers), String.class);
+		ResponseEntity<String> response = restTemplate
+				.withBasicAuth("apiuser", "changeit")
+				.postForEntity("/api/v1/transfers", new HttpEntity<>(body, headers), String.class);
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getHeaders().getFirst(CorrelationIdFilter.HTTP_HEADER)).isEqualTo(correlationId);
 
