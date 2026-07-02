@@ -6,7 +6,8 @@ import com.example.ApexPay.entity.OutboxEvent;
 import com.example.ApexPay.event.TransactionSuccessEvent;
 import com.example.ApexPay.repository.OutboxEventRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
@@ -39,7 +40,6 @@ import java.util.List;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class OutboxRelayService {
 
     private final OutboxEventRepository outboxEventRepository;
@@ -47,8 +47,33 @@ public class OutboxRelayService {
     private final ObjectMapper objectMapper;
     private final OutboxProperties props;
 
+    // Metrics (registered eagerly at construction so they appear in /actuator/prometheus at zero).
+    private final Counter publishedCounter;
+    private final Counter publishFailedCounter;
+    private final Counter retriedCounter;
+
     /** Routing key the outbox uses for standard transaction-success events. */
     static final String ROUTING_KEY = "transaction.success.standard";
+
+    public OutboxRelayService(OutboxEventRepository outboxEventRepository,
+                              RabbitTemplate rabbitTemplate,
+                              ObjectMapper objectMapper,
+                              OutboxProperties props,
+                              MeterRegistry meterRegistry) {
+        this.outboxEventRepository = outboxEventRepository;
+        this.rabbitTemplate = rabbitTemplate;
+        this.objectMapper = objectMapper;
+        this.props = props;
+        this.publishedCounter = Counter.builder("apexpay.outbox.published")
+                .description("Outbox events successfully relayed to RabbitMQ (broker-confirmed)")
+                .register(meterRegistry);
+        this.publishFailedCounter = Counter.builder("apexpay.outbox.publish.failed")
+                .description("Outbox event publish attempts that failed (NACK, timeout, or exception)")
+                .register(meterRegistry);
+        this.retriedCounter = Counter.builder("apexpay.outbox.retried")
+                .description("Re-attempts of outbox events whose previous publish attempt failed")
+                .register(meterRegistry);
+    }
 
     /**
      * Relay one batch of eligible events. Each event is handled independently: a
@@ -82,6 +107,10 @@ public class OutboxRelayService {
      * confirmed the publish (event marked PUBLISHED), false otherwise (FAILED/DEAD).
      */
     boolean relayOne(OutboxEvent event) {
+        // A non-zero attempt count means a previous publish already failed: this is a re-attempt.
+        if (event.getAttemptCount() > 0) {
+            retriedCounter.increment();
+        }
         try {
             TransactionSuccessEvent payload = objectMapper.readValue(
                     event.getPayload(), TransactionSuccessEvent.class);
@@ -92,6 +121,7 @@ public class OutboxRelayService {
             if (confirmed) {
                 event.markPublished();
                 outboxEventRepository.save(event);
+                publishedCounter.increment();
                 log.info("Relayed outbox event {} (confirmed by broker).", event.getId());
                 return true;
             }
@@ -124,6 +154,7 @@ public class OutboxRelayService {
      * now consumed.
      */
     private void recordFailure(OutboxEvent event, String error) {
+        publishFailedCounter.increment();
         int attempts = event.getAttemptCount() + 1;
         event.setAttemptCount(attempts);
 
