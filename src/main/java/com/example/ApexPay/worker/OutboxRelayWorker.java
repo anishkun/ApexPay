@@ -9,6 +9,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -29,6 +31,7 @@ public class OutboxRelayWorker {
     private final OutboxEventRepository outboxEventRepository;
     private final RabbitTemplate rabbitTemplate;
     private final ObjectMapper objectMapper; // ADDED: To read the JSON string
+    private final ObservationRegistry observationRegistry;
 
     // Metrics (registered eagerly at construction so they appear in /actuator/prometheus at zero)
     private final Counter publishedCounter;
@@ -43,10 +46,12 @@ public class OutboxRelayWorker {
     public OutboxRelayWorker(OutboxEventRepository outboxEventRepository,
                              RabbitTemplate rabbitTemplate,
                              ObjectMapper objectMapper,
-                             MeterRegistry meterRegistry) {
+                             MeterRegistry meterRegistry,
+                             ObservationRegistry observationRegistry) {
         this.outboxEventRepository = outboxEventRepository;
         this.rabbitTemplate = rabbitTemplate;
         this.objectMapper = objectMapper;
+        this.observationRegistry = observationRegistry;
         this.publishedCounter = Counter.builder("apexpay.outbox.published")
                 .description("Outbox events successfully relayed to RabbitMQ")
                 .register(meterRegistry);
@@ -92,24 +97,15 @@ public class OutboxRelayWorker {
                 MDC.put(CorrelationIdFilter.MDC_KEY, correlationId);
             }
             try {
-                String routingKey = "transaction.success.standard";
-
-                // FIX: Convert the String payload back to an Object before sending
-                TransactionSuccessEvent payloadObject = objectMapper.readValue(
-                        event.getPayload(),
-                        TransactionSuccessEvent.class
-                );
-
-                // Hand the Object to RabbitMQ (Jackson will serialize it properly now),
-                // stamping the correlation ID onto the AMQP message so the consumer
-                // (possibly another process) can continue the same trail.
-                rabbitTemplate.convertAndSend(RabbitMQConfig.EXCHANGE, routingKey, payloadObject, message -> {
-                    if (correlationId != null) {
-                        message.getMessageProperties().setHeader(CorrelationIdFilter.AMQP_HEADER, correlationId);
-                        message.getMessageProperties().setCorrelationId(correlationId);
-                    }
-                    return message;
-                });
+                // Root the publish in its own Observation so it gets a span even though
+                // the scheduler thread has no HTTP trace context. The outbox hop
+                // intentionally breaks the trace (design decision): the HTTP trace,
+                // this relay trace and the consumer trace are joined by correlationId.
+                // If the observation machinery ever throws, the surrounding catch marks
+                // the event for retry -- an event can be delayed but never lost.
+                Observation.createNotStarted("apexpay.outbox.relay", observationRegistry)
+                        .lowCardinalityKeyValue("event.type", event.getEventType())
+                        .observeChecked(() -> publishEvent(event, correlationId));
 
                 event.setProcessed(true);
                 outboxEventRepository.save(event);
@@ -125,5 +121,28 @@ public class OutboxRelayWorker {
                 MDC.remove(CorrelationIdFilter.MDC_KEY);
             }
         }
+    }
+
+    private void publishEvent(OutboxEvent event, String correlationId) throws Exception {
+        String routingKey = "transaction.success.standard";
+
+        // FIX: Convert the String payload back to an Object before sending
+        TransactionSuccessEvent payloadObject = objectMapper.readValue(
+                event.getPayload(),
+                TransactionSuccessEvent.class
+        );
+
+        // Hand the Object to RabbitMQ (Jackson will serialize it properly now),
+        // stamping the correlation ID onto the AMQP message so the consumer
+        // (possibly another process) can continue the same trail. With
+        // spring.rabbitmq.template.observation-enabled=true the template also adds a
+        // send span (child of apexpay.outbox.relay) and a W3C traceparent header.
+        rabbitTemplate.convertAndSend(RabbitMQConfig.EXCHANGE, routingKey, payloadObject, message -> {
+            if (correlationId != null) {
+                message.getMessageProperties().setHeader(CorrelationIdFilter.AMQP_HEADER, correlationId);
+                message.getMessageProperties().setCorrelationId(correlationId);
+            }
+            return message;
+        });
     }
 }
