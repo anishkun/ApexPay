@@ -96,6 +96,9 @@ public class TransferService {
                     .eventType("TransactionSuccessEvent")
                     .payload(objectMapper.writeValueAsString(eventPayload)) // Convert to JSON
                     .processed(false)
+                    // Persist the request's correlation ID: the relay worker runs on a
+                    // scheduler thread, so the outbox row must carry it across the hop.
+                    .correlationId(org.slf4j.MDC.get(com.example.ApexPay.config.CorrelationIdFilter.MDC_KEY))
                     .build();
 
             outboxEventRepository.save(outboxEvent);

@@ -37,6 +37,13 @@ public class OutboxEvent {
     @Column(nullable = false)
     private boolean processed; // false = pending, true = sent to RabbitMQ
 
+    // Business correlation ID captured from the originating HTTP request (nullable:
+    // pre-existing rows and non-HTTP writers have none). The relay worker runs on a
+    // scheduler thread with no request context, so this column is the only carrier
+    // of the correlation ID across the async outbox hop.
+    @Column
+    private String correlationId;
+
     @CreationTimestamp
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;

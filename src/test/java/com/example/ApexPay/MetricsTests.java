@@ -10,6 +10,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.amqp.AmqpException;
+import org.springframework.amqp.core.MessagePostProcessor;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
@@ -133,7 +134,8 @@ class MetricsTests {
 		double retriedBefore = counterValue("apexpay.outbox.retried");
 
 		doThrow(new AmqpException("broker unavailable"))
-				.when(rabbitTemplate).convertAndSend(anyString(), anyString(), (Object) any());
+				.when(rabbitTemplate)
+				.convertAndSend(anyString(), anyString(), (Object) any(), any(MessagePostProcessor.class));
 
 		OutboxEvent event = seedOutboxEvent();
 		try {
@@ -161,7 +163,7 @@ class MetricsTests {
 		long processedBefore = meterRegistry.get("apexpay.consumer.processing").timer().count();
 
 		rabbitMQConsumer.consumeMessageFromQueue(new TransactionSuccessEvent(
-				UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), new BigDecimal("10.00")));
+				UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), new BigDecimal("10.00")), null);
 
 		assertThat(counterValue("apexpay.consumer.consumed")).isEqualTo(consumedBefore + 1);
 		assertThat(meterRegistry.get("apexpay.consumer.processing").timer().count()).isGreaterThan(processedBefore);

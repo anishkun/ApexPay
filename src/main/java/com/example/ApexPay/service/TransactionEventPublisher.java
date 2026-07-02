@@ -1,9 +1,11 @@
 package com.example.ApexPay.service;
 
+import com.example.ApexPay.config.CorrelationIdFilter;
 import com.example.ApexPay.config.RabbitMQConfig;
 import com.example.ApexPay.event.TransactionSuccessEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
@@ -25,7 +27,17 @@ public class TransactionEventPublisher {
                 ? "transaction.success.high_value"
                 : "transaction.success.standard";
 
-        rabbitTemplate.convertAndSend(RabbitMQConfig.EXCHANGE, routingKey, event);
+        // AFTER_COMMIT listeners run synchronously on the committing (request) thread,
+        // so the correlation ID placed in MDC by CorrelationIdFilter is still present.
+        String correlationId = MDC.get(CorrelationIdFilter.MDC_KEY);
+
+        rabbitTemplate.convertAndSend(RabbitMQConfig.EXCHANGE, routingKey, event, message -> {
+            if (correlationId != null) {
+                message.getMessageProperties().setHeader(CorrelationIdFilter.AMQP_HEADER, correlationId);
+                message.getMessageProperties().setCorrelationId(correlationId);
+            }
+            return message;
+        });
         log.info("Published to RabbitMQ: {} with routing key: {}", event.getTransactionId(), routingKey);
     }
 }

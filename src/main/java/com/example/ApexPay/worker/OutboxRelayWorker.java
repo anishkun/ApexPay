@@ -1,5 +1,6 @@
 package com.example.ApexPay.worker;
 
+import com.example.ApexPay.config.CorrelationIdFilter;
 import com.example.ApexPay.config.RabbitMQConfig;
 import com.example.ApexPay.entity.OutboxEvent;
 import com.example.ApexPay.event.TransactionSuccessEvent;
@@ -9,6 +10,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -83,6 +85,12 @@ public class OutboxRelayWorker {
             if (previouslyFailedEventIds.remove(event.getId())) {
                 retriedCounter.increment();
             }
+            // Scheduler thread has no request context: restore the correlation ID
+            // persisted on the outbox row so relay logs join the payment's lifecycle.
+            String correlationId = event.getCorrelationId();
+            if (correlationId != null) {
+                MDC.put(CorrelationIdFilter.MDC_KEY, correlationId);
+            }
             try {
                 String routingKey = "transaction.success.standard";
 
@@ -92,8 +100,16 @@ public class OutboxRelayWorker {
                         TransactionSuccessEvent.class
                 );
 
-                // Hand the Object to RabbitMQ (Jackson will serialize it properly now)
-                rabbitTemplate.convertAndSend(RabbitMQConfig.EXCHANGE, routingKey, payloadObject);
+                // Hand the Object to RabbitMQ (Jackson will serialize it properly now),
+                // stamping the correlation ID onto the AMQP message so the consumer
+                // (possibly another process) can continue the same trail.
+                rabbitTemplate.convertAndSend(RabbitMQConfig.EXCHANGE, routingKey, payloadObject, message -> {
+                    if (correlationId != null) {
+                        message.getMessageProperties().setHeader(CorrelationIdFilter.AMQP_HEADER, correlationId);
+                        message.getMessageProperties().setCorrelationId(correlationId);
+                    }
+                    return message;
+                });
 
                 event.setProcessed(true);
                 outboxEventRepository.save(event);
@@ -105,6 +121,8 @@ public class OutboxRelayWorker {
                 publishFailedCounter.increment();
                 previouslyFailedEventIds.add(event.getId());
                 log.error("Failed to relay outbox event {}. Will retry. Error: {}", event.getId(), e.getMessage());
+            } finally {
+                MDC.remove(CorrelationIdFilter.MDC_KEY);
             }
         }
     }
