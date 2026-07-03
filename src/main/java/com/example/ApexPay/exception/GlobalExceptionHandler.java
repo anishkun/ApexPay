@@ -1,5 +1,6 @@
 package com.example.ApexPay.exception;
 
+import jakarta.validation.ConstraintViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import java.time.LocalDateTime;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -68,6 +70,18 @@ public class GlobalExceptionHandler {
         Map<String, String> fieldErrors = new HashMap<>();
         ex.getBindingResult().getFieldErrors().forEach(
                 error -> fieldErrors.put(error.getField(), error.getDefaultMessage()));
+        return build(HttpStatus.BAD_REQUEST, "Validation failed", fieldErrors);
+    }
+
+    /**
+     * Constraint violations from method-level validation (@Validated on path/query
+     * params) also return a 400 with per-property detail, matching the @RequestBody path.
+     */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ErrorResponse> handleConstraintViolation(ConstraintViolationException ex) {
+        Map<String, String> fieldErrors = new LinkedHashMap<>();
+        ex.getConstraintViolations().forEach(
+                v -> fieldErrors.putIfAbsent(v.getPropertyPath().toString(), v.getMessage()));
         return build(HttpStatus.BAD_REQUEST, "Validation failed", fieldErrors);
     }
 }

@@ -6,8 +6,9 @@ import com.example.ApexPay.repository.AccountRepository;
 import com.example.ApexPay.service.AccountService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
-import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -28,9 +29,18 @@ public class AccountController {
     // DTO for creating an account
     @Data
     public static class CreateAccountRequest {
-        @NotNull private UUID userId;
-        @NotNull @DecimalMin("0.0") private BigDecimal initialBalance;
-        @NotBlank private String currency;
+        @NotNull(message = "User ID is required")
+        private UUID userId;
+
+        @NotNull(message = "Initial balance is required")
+        @DecimalMin(value = "0.0", message = "Initial balance cannot be negative")
+        @Digits(integer = 15, fraction = 4, message = "Initial balance has too many digits (max 4 decimal places)")
+        private BigDecimal initialBalance;
+
+        // ISO 4217 currency code: exactly three uppercase letters (e.g. USD, EUR).
+        @NotNull(message = "Currency is required")
+        @Pattern(regexp = "^[A-Z]{3}$", message = "Currency must be a 3-letter ISO code (e.g. USD)")
+        private String currency;
     }
 
     @PostMapping

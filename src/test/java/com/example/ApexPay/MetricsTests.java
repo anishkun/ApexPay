@@ -126,7 +126,10 @@ class MetricsTests {
 
 	@Test
 	void prometheusEndpointExposesApexPayMeters() {
-		ResponseEntity<String> response = restTemplate.getForEntity("/actuator/prometheus", String.class);
+		// /actuator/prometheus now requires the ops (ROLE_ACTUATOR) credential.
+		ResponseEntity<String> response = restTemplate
+				.withBasicAuth("ops", "changeit")
+				.getForEntity("/actuator/prometheus", String.class);
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getBody())
 				.contains("apexpay_outbox_published_total")
