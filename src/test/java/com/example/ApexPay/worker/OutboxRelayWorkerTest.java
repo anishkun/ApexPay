@@ -7,6 +7,7 @@ import com.example.ApexPay.event.TransactionSuccessEvent;
 import com.example.ApexPay.repository.OutboxEventRepository;
 import com.example.ApexPay.service.OutboxRelayService;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.domain.Pageable;
@@ -54,7 +55,7 @@ class OutboxRelayWorkerTest {
         // Broker confirms the publish.
         when(rabbitTemplate.invoke(any())).thenReturn(Boolean.TRUE);
 
-        OutboxRelayService service = new OutboxRelayService(repo, rabbitTemplate, mapper, props);
+        OutboxRelayService service = new OutboxRelayService(repo, rabbitTemplate, mapper, props, new SimpleMeterRegistry());
         int published = service.relayBatch();
 
         assertEquals(1, published);
@@ -77,7 +78,7 @@ class OutboxRelayWorkerTest {
         // Broker did NOT confirm (NACK / timeout).
         when(rabbitTemplate.invoke(any())).thenReturn(Boolean.FALSE);
 
-        OutboxRelayService service = new OutboxRelayService(repo, rabbitTemplate, mapper, props);
+        OutboxRelayService service = new OutboxRelayService(repo, rabbitTemplate, mapper, props, new SimpleMeterRegistry());
         int published = service.relayBatch();
 
         assertEquals(0, published);

@@ -7,6 +7,7 @@ import com.example.ApexPay.enums.OutboxStatus;
 import com.example.ApexPay.event.TransactionSuccessEvent;
 import com.example.ApexPay.repository.OutboxEventRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -76,7 +77,7 @@ class OutboxPublishRetryProgressionTest {
         // Broker never confirms.
         when(rabbitTemplate.invoke(any())).thenReturn(Boolean.FALSE);
 
-        OutboxRelayService service = new OutboxRelayService(repo, rabbitTemplate, mapper, props);
+        OutboxRelayService service = new OutboxRelayService(repo, rabbitTemplate, mapper, props, new SimpleMeterRegistry());
 
         // attempt-1..4 are retryable FAILED with growing backoff; attempt-5 is DEAD.
         long[] expectedDelays = {1000, 2000, 4000, 8000};
@@ -143,7 +144,7 @@ class OutboxPublishRetryProgressionTest {
         when(repo.save(event)).thenThrow(
                 new OptimisticLockingFailureException("stale version - row already relayed by a racing relay"));
 
-        OutboxRelayService service = new OutboxRelayService(repo, rabbitTemplate, mapper, props);
+        OutboxRelayService service = new OutboxRelayService(repo, rabbitTemplate, mapper, props, new SimpleMeterRegistry());
 
         // The optimistic-lock failure escapes relayBatch (the @Transactional batch
         // then rolls back), so the losing relay's update never commits: no double

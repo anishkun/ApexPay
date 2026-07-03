@@ -7,6 +7,7 @@ import com.example.ApexPay.enums.OutboxStatus;
 import com.example.ApexPay.event.TransactionSuccessEvent;
 import com.example.ApexPay.repository.OutboxEventRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -106,7 +107,7 @@ class OutboxPublishFailureDlqIntegrationTest {
         // A no-op repo: save() just returns the entity (we assert on the entity itself).
         OutboxEventRepository repo = new InMemoryOutboxRepo();
 
-        OutboxRelayService relay = new OutboxRelayService(repo, failing, objectMapper, props);
+        OutboxRelayService relay = new OutboxRelayService(repo, failing, objectMapper, props, new SimpleMeterRegistry());
 
         OutboxEvent event = persistableEvent();
 

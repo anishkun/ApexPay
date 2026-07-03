@@ -7,6 +7,7 @@ import com.example.ApexPay.enums.OutboxStatus;
 import com.example.ApexPay.event.TransactionSuccessEvent;
 import com.example.ApexPay.repository.OutboxEventRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -57,7 +58,7 @@ class OutboxRelayDeadLetterTest {
         // Broker never confirms -> publish fails.
         when(rabbitTemplate.invoke(any())).thenReturn(Boolean.FALSE);
 
-        OutboxRelayService service = new OutboxRelayService(repo, rabbitTemplate, mapper, props);
+        OutboxRelayService service = new OutboxRelayService(repo, rabbitTemplate, mapper, props, new SimpleMeterRegistry());
         int published = service.relayBatch();
 
         assertEquals(0, published);
@@ -86,7 +87,7 @@ class OutboxRelayDeadLetterTest {
         when(repo.findEligibleForRelay(any(), any(Pageable.class))).thenReturn(List.of(event));
         when(rabbitTemplate.invoke(any())).thenReturn(Boolean.FALSE);
 
-        OutboxRelayService service = new OutboxRelayService(repo, rabbitTemplate, mapper, props);
+        OutboxRelayService service = new OutboxRelayService(repo, rabbitTemplate, mapper, props, new SimpleMeterRegistry());
         service.relayBatch();
 
         assertEquals(OutboxStatus.FAILED, event.getStatus());

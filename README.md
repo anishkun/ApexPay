@@ -99,13 +99,19 @@ docker run -d --name apexpay-rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3.13-
 ```
 
 **Database connection & credentials.** The app connects to
-`jdbc:postgresql://localhost:5432/ApexDB`. Credentials are read from environment variables with
-local defaults:
+`jdbc:postgresql://localhost:5432/ApexDB`. All connection settings and credentials are read from
+environment variables (see `.env.example` for the full list) with local-dev defaults that match the
+Docker setup above — for a local run you only need to set `DB_PASSWORD`. No plaintext production
+secrets are committed; production deployments must override `DB_*` and `RABBITMQ_*` via the environment.
 
 | Env var | Default | Used for |
 | ------- | ------- | -------- |
 | `DB_USERNAME` | `postgres` | Postgres datasource user |
 | `DB_PASSWORD` | `password` | Postgres datasource password |
+| `RABBITMQ_HOST` | `localhost` | RabbitMQ broker host |
+| `RABBITMQ_PORT` | `5672` | RabbitMQ broker port |
+| `RABBITMQ_USERNAME` | `guest` | RabbitMQ user (override for remote brokers) |
+| `RABBITMQ_PASSWORD` | `guest` | RabbitMQ password (override for remote brokers) |
 
 On first boot **Flyway runs the migrations** in `src/main/resources/db/migration/` and Hibernate
 then validates its entity mappings against that schema (`ddl-auto=validate`). The schema is fully
