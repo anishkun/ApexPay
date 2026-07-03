@@ -117,6 +117,9 @@ public class TransferService {
                     .eventType("TransactionSuccessEvent")
                     .payload(objectMapper.writeValueAsString(eventPayload)) // Convert to JSON
                     .processed(false)
+                    // Capture the request's correlation ID (null off the HTTP path) so the
+                    // async relay can rejoin this payment's log/trace trail after commit.
+                    .correlationId(org.slf4j.MDC.get(com.example.ApexPay.config.CorrelationIdFilter.MDC_KEY))
                     .build();
 
             outboxEventRepository.save(outboxEvent);

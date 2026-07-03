@@ -1,5 +1,6 @@
 package com.example.ApexPay.service;
 
+import com.example.ApexPay.config.CorrelationIdFilter;
 import com.example.ApexPay.config.OutboxProperties;
 import com.example.ApexPay.config.RabbitMQConfig;
 import com.example.ApexPay.entity.OutboxEvent;
@@ -9,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
@@ -111,12 +113,18 @@ public class OutboxRelayService {
         if (event.getAttemptCount() > 0) {
             retriedCounter.increment();
         }
+        // Scheduler thread has no request context: restore the correlation ID persisted
+        // on the outbox row so relay logs rejoin the payment's lifecycle. Cleared in finally.
+        String correlationId = event.getCorrelationId();
+        if (correlationId != null) {
+            MDC.put(CorrelationIdFilter.MDC_KEY, correlationId);
+        }
         try {
             TransactionSuccessEvent payload = objectMapper.readValue(
                     event.getPayload(), TransactionSuccessEvent.class);
 
             boolean confirmed = publishConfirmed(
-                    RabbitMQConfig.EXCHANGE, ROUTING_KEY, payload, event.getId().toString());
+                    RabbitMQConfig.EXCHANGE, ROUTING_KEY, payload, event.getId().toString(), correlationId);
 
             if (confirmed) {
                 event.markPublished();
@@ -131,18 +139,28 @@ public class OutboxRelayService {
         } catch (Exception e) {
             recordFailure(event, e.getClass().getSimpleName() + ": " + e.getMessage());
             return false;
+        } finally {
+            MDC.remove(CorrelationIdFilter.MDC_KEY);
         }
     }
 
     /**
      * Publish a message with a stable message id and wait for a publisher confirm.
-     * Returns true only if the broker ACKed within the configured timeout.
+     * Returns true only if the broker ACKed within the configured timeout. The
+     * correlation ID (nullable) is stamped on the message so it rides the broker hop
+     * to the consumer via both the {@code x-correlation-id} header and the standard
+     * AMQP correlationId property.
      */
-    private boolean publishConfirmed(String exchange, String routingKey, Object payload, String messageId) {
+    private boolean publishConfirmed(String exchange, String routingKey, Object payload,
+                                     String messageId, String correlationId) {
         return Boolean.TRUE.equals(rabbitTemplate.invoke(operations -> {
             CorrelationData correlation = new CorrelationData(messageId);
             operations.convertAndSend(exchange, routingKey, payload, message -> {
                 message.getMessageProperties().setMessageId(messageId);
+                if (correlationId != null) {
+                    message.getMessageProperties().setHeader(CorrelationIdFilter.AMQP_HEADER, correlationId);
+                    message.getMessageProperties().setCorrelationId(correlationId);
+                }
                 return message;
             }, correlation);
             return operations.waitForConfirms(props.getConfirmTimeoutMs());

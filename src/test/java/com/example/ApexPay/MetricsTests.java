@@ -193,7 +193,7 @@ class MetricsTests {
 		long processedBefore = meterRegistry.get("apexpay.consumer.processing").timer().count();
 
 		rabbitMQConsumer.consumeMessageFromQueue(new TransactionSuccessEvent(
-				UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), new BigDecimal("10.00")));
+				UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), new BigDecimal("10.00")), null);
 
 		assertThat(counterValue("apexpay.consumer.consumed")).isEqualTo(consumedBefore + 1);
 		assertThat(meterRegistry.get("apexpay.consumer.processing").timer().count()).isGreaterThan(processedBefore);
