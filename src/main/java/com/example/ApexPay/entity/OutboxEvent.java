@@ -36,6 +36,15 @@ public class OutboxEvent {
     private String payload; // The JSON representation of the event
 
     /**
+     * Business correlation ID captured from the originating HTTP request (nullable:
+     * pre-existing rows and non-HTTP writers have none). The relay runs on a
+     * scheduler thread with no request context, so this column is the only carrier
+     * of the correlation ID across the async outbox hop.
+     */
+    @Column(name = "correlation_id")
+    private String correlationId;
+
+    /**
      * Convenience flag kept in sync with {@code status == PUBLISHED}. Retained for
      * backward compatibility with existing queries/tests ({@code findPendingEvents}).
      * Always mutate via {@link #markPublished()} / {@link #markPending()} so the two

@@ -126,7 +126,10 @@ class MetricsTests {
 
 	@Test
 	void prometheusEndpointExposesApexPayMeters() {
-		ResponseEntity<String> response = restTemplate.getForEntity("/actuator/prometheus", String.class);
+		// /actuator/prometheus now requires the ops (ROLE_ACTUATOR) credential.
+		ResponseEntity<String> response = restTemplate
+				.withBasicAuth("ops", "changeit")
+				.getForEntity("/actuator/prometheus", String.class);
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getBody())
 				.contains("apexpay_outbox_published_total")
@@ -193,7 +196,7 @@ class MetricsTests {
 		long processedBefore = meterRegistry.get("apexpay.consumer.processing").timer().count();
 
 		rabbitMQConsumer.consumeMessageFromQueue(new TransactionSuccessEvent(
-				UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), new BigDecimal("10.00")));
+				UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), new BigDecimal("10.00")), null);
 
 		assertThat(counterValue("apexpay.consumer.consumed")).isEqualTo(consumedBefore + 1);
 		assertThat(meterRegistry.get("apexpay.consumer.processing").timer().count()).isGreaterThan(processedBefore);
