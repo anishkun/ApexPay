@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -74,13 +75,13 @@ public class IdempotentTransferExecutor {
      * the {@code Transaction}, so we look them up and return the winner's receipt.
      * A fresh read-only transaction (the facade is non-transactional, so this is a
      * new transaction that sees the winner's committed rows).
+     *
+     * <p>Empty when no one recorded the key, i.e. the failure was not a lost race.
      */
     @Transactional(readOnly = true)
-    public Transaction findRecordedTransaction(String idempotencyKey) {
-        IdempotencyRecord record = idempotencyRepository.findById(idempotencyKey)
-                .orElseThrow(() -> new IllegalStateException(
-                        "Idempotency key " + idempotencyKey + " vanished after a constraint violation"));
-        return transactionRepository.findById(record.getTransactionId())
-                .orElseThrow(() -> new IllegalStateException("Cached transaction missing from DB"));
+    public Optional<Transaction> findRecordedTransaction(String idempotencyKey) {
+        return idempotencyRepository.findById(idempotencyKey)
+                .map(record -> transactionRepository.findById(record.getTransactionId())
+                        .orElseThrow(() -> new IllegalStateException("Cached transaction missing from DB")));
     }
 }

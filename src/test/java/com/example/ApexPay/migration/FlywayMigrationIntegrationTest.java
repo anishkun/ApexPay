@@ -10,9 +10,12 @@ import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -84,6 +87,24 @@ class FlywayMigrationIntegrationTest extends AbstractPostgresIntegrationTest {
             }
         }
         assertTrue(v1Applied);
+    }
+
+    /** The audit trail is append-only at the database tier: inserts work, edits do not. */
+    @Test
+    void auditLogsRejectUpdateAndDelete() throws Exception {
+        UUID id = UUID.randomUUID();
+        try (Connection conn = dataSource.getConnection();
+             Statement st = conn.createStatement()) {
+            st.executeUpdate("INSERT INTO audit_logs (id, entity_id, action, timestamp) VALUES ('"
+                    + id + "', '" + id + "', 'CREATED', now())");
+
+            for (String sql : List.of(
+                    "UPDATE audit_logs SET new_state = 'tampered' WHERE id = '" + id + "'",
+                    "DELETE FROM audit_logs WHERE id = '" + id + "'")) {
+                SQLException ex = assertThrows(SQLException.class, () -> st.executeUpdate(sql));
+                assertTrue(ex.getMessage().contains("audit_logs"), ex.getMessage());
+            }
+        }
     }
 
     /**

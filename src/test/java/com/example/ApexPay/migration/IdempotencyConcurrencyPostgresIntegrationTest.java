@@ -146,6 +146,51 @@ class IdempotencyConcurrencyPostgresIntegrationTest extends AbstractPostgresInte
     }
 
     /**
+     * Same key, but the balance covers the transfer only ONCE: a loser finds the
+     * account already drained by the winner. It is still a replay, so it must get the
+     * winner's receipt rather than "insufficient funds".
+     */
+    @Test
+    void sameKeyRaceReturnsReceiptWhenBalanceCoversOnlyOneTransfer() throws Exception {
+        final int threads = 24;
+        final BigDecimal amount = new BigDecimal("30.00");
+        final UUID srcId = newAccount("30.00").getId();
+        final UUID dstId = newAccount("0.00").getId();
+        final String key = "drain-key-" + UUID.randomUUID();
+
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CountDownLatch ready = new CountDownLatch(threads);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<Transaction>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                futures.add(pool.submit(() -> {
+                    ready.countDown();
+                    start.await();
+                    return idempotentTransferService.executeIdempotentTransfer(key, srcId, dstId, amount);
+                }));
+            }
+            assertTrue(ready.await(30, TimeUnit.SECONDS), "all threads should reach the barrier");
+            start.countDown();
+
+            Set<UUID> txIds = new HashSet<>();
+            for (Future<Transaction> f : futures) {
+                txIds.add(f.get(60, TimeUnit.SECONDS).getId());
+            }
+
+            assertEquals(1, txIds.size(), () -> "all callers must share one transaction id, got: " + txIds);
+            assertEquals(1, countTransactionsBetween(srcId, dstId));
+            assertEquals(0, accountRepository.findById(srcId).orElseThrow()
+                    .getBalance().compareTo(BigDecimal.ZERO));
+        } finally {
+            pool.shutdownNow();
+            idempotencyRepository.findById(key).ifPresent(r -> idempotencyRepository.deleteById(key));
+            accountRepository.deleteById(srcId);
+            accountRepository.deleteById(dstId);
+        }
+    }
+
+    /**
      * N threads, DISTINCT keys, same source account, concurrent transfers. Proves
      * the pessimistic account locks prevent lost updates: every transfer applies
      * (sum conserved across src+dst), no negative balance, exactly N transactions,
