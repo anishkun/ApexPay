@@ -39,8 +39,10 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.NOT_FOUND, ex.getMessage(), null);
     }
 
-    @ExceptionHandler(InsufficientFundsException.class)
-    public ResponseEntity<ErrorResponse> handleInsufficientFunds(InsufficientFundsException ex) {
+    /** Well-formed requests that a business rule refuses. */
+    @ExceptionHandler({InsufficientFundsException.class, CurrencyMismatchException.class,
+            IdempotencyKeyReusedException.class})
+    public ResponseEntity<ErrorResponse> handleUnprocessable(RuntimeException ex) {
         return build(HttpStatus.UNPROCESSABLE_ENTITY, ex.getMessage(), null);
     }
 

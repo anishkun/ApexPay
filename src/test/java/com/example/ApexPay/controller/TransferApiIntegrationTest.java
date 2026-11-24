@@ -31,9 +31,13 @@ class TransferApiIntegrationTest {
     private ObjectMapper objectMapper;
 
     private UUID createAccount(String balance) throws Exception {
+        return createAccount(balance, "USD");
+    }
+
+    private UUID createAccount(String balance, String currency) throws Exception {
         String body = String.format(
-                "{\"userId\":\"%s\",\"initialBalance\":%s,\"currency\":\"USD\"}",
-                UUID.randomUUID(), balance);
+                "{\"userId\":\"%s\",\"initialBalance\":%s,\"currency\":\"%s\"}",
+                UUID.randomUUID(), balance, currency);
         String resp = mockMvc.perform(post("/api/v1/accounts").contentType(APPLICATION_JSON).content(body))
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
@@ -104,6 +108,74 @@ class TransferApiIntegrationTest {
         assertEquals(objectMapper.readTree(first).get("id"), objectMapper.readTree(retry).get("id"));
         // Deducted only once
         assertEquals(0, balanceOf(src).compareTo(new BigDecimal("70.00")));
+    }
+
+    @Test
+    void reusedKeyWithDifferentRequestIsUnprocessable() throws Exception {
+        UUID src = createAccount("100.00");
+        UUID dst = createAccount("0.00");
+        UUID other = createAccount("100.00");
+        String key = "k-" + UUID.randomUUID();
+
+        mockMvc.perform(post("/api/v1/transfers")
+                        .header("Idempotency-Key", key)
+                        .contentType(APPLICATION_JSON)
+                        .content(transferBody(src, dst, "30.00")))
+                .andExpect(status().isOk());
+
+        String[] differentRequests = {
+                transferBody(src, dst, "31.00"),    // amount
+                transferBody(src, other, "30.00"),  // destination
+                transferBody(other, dst, "30.00"),  // source
+        };
+        for (String body : differentRequests) {
+            mockMvc.perform(post("/api/v1/transfers")
+                            .header("Idempotency-Key", key)
+                            .contentType(APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isUnprocessableEntity());
+        }
+
+        // The same amount written at a different scale is still the same request.
+        mockMvc.perform(post("/api/v1/transfers")
+                        .header("Idempotency-Key", key)
+                        .contentType(APPLICATION_JSON)
+                        .content(transferBody(src, dst, "30.0")))
+                .andExpect(status().isOk());
+
+        assertEquals(0, balanceOf(src).compareTo(new BigDecimal("70.00")));
+        assertEquals(0, balanceOf(other).compareTo(new BigDecimal("100.00")));
+    }
+
+    @Test
+    void transferBetweenDifferentCurrenciesIsUnprocessable() throws Exception {
+        UUID src = createAccount("100.00", "USD");
+        UUID dst = createAccount("0.00", "INR");
+        mockMvc.perform(post("/api/v1/transfers")
+                        .header("Idempotency-Key", "k-" + UUID.randomUUID())
+                        .contentType(APPLICATION_JSON)
+                        .content(transferBody(src, dst, "10.00")))
+                .andExpect(status().isUnprocessableEntity());
+
+        assertEquals(0, balanceOf(src).compareTo(new BigDecimal("100.00")));
+        assertEquals(0, balanceOf(dst).compareTo(BigDecimal.ZERO));
+    }
+
+    @Test
+    void idempotencyKeyOver100CharactersIsBadRequest() throws Exception {
+        UUID src = createAccount("100.00");
+        UUID dst = createAccount("0.00");
+        mockMvc.perform(post("/api/v1/transfers")
+                        .header("Idempotency-Key", "k".repeat(101))
+                        .contentType(APPLICATION_JSON)
+                        .content(transferBody(src, dst, "10.00")))
+                .andExpect(status().isBadRequest());
+        // 100 is the column limit and stays valid.
+        mockMvc.perform(post("/api/v1/transfers")
+                        .header("Idempotency-Key", "k".repeat(100))
+                        .contentType(APPLICATION_JSON)
+                        .content(transferBody(src, dst, "10.00")))
+                .andExpect(status().isOk());
     }
 
     @Test

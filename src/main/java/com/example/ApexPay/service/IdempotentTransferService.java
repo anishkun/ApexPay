@@ -2,6 +2,8 @@ package com.example.ApexPay.service;
 
 import com.example.ApexPay.entity.IdempotencyRecord;
 import com.example.ApexPay.entity.Transaction;
+import com.example.ApexPay.exception.IdempotencyKeyReusedException;
+import com.example.ApexPay.exception.InsufficientFundsException;
 import com.example.ApexPay.repository.IdempotencyRecordRepository;
 import com.example.ApexPay.repository.TransactionRepository;
 import lombok.RequiredArgsConstructor;
@@ -33,7 +35,13 @@ import java.util.UUID;
  * {@link DataIntegrityViolationException}, which rolls back its ENTIRE transfer
  * (no double debit). The loser then re-reads the winner's committed record in a
  * fresh transaction and returns the winner's transaction. Result: exactly one debit,
- * both callers receive one consistent receipt.
+ * both callers receive one consistent receipt. If the winner drained the account, the
+ * loser fails with {@link InsufficientFundsException} before it reaches the INSERT; that
+ * is the same lost race and is recovered the same way.
+ *
+ * <h2>Key reuse</h2>
+ * A key identifies one request. Replaying it with a different source, destination or
+ * amount is rejected with {@link IdempotencyKeyReusedException} (422).
  *
  * <h2>Optimistic-lock handling</h2>
  * The primary concurrency control on balances is the PESSIMISTIC_WRITE lock inside
@@ -53,17 +61,25 @@ public class IdempotentTransferService {
     /** Bounded retries when an optimistic-lock conflict escapes the pessimistic lock. */
     private static final int MAX_OPTIMISTIC_LOCK_RETRIES = 3;
 
+    /** Matches the {@code idempotency_records.idempotency_key} column length. */
+    private static final int MAX_KEY_LENGTH = 100;
+
     private final IdempotencyRecordRepository idempotencyRepository;
     private final TransactionRepository transactionRepository;
     private final IdempotentTransferExecutor executor;
 
     public Transaction executeIdempotentTransfer(String idempotencyKey, UUID source, UUID dest, BigDecimal amount) {
 
+        if (idempotencyKey.length() > MAX_KEY_LENGTH) {
+            throw new IllegalArgumentException(
+                    "Idempotency-Key must be at most " + MAX_KEY_LENGTH + " characters");
+        }
+
         // 1. Fast path: a prior completed request already cached a result for this key.
         Optional<Transaction> replay = findCachedTransaction(idempotencyKey);
         if (replay.isPresent()) {
             log.info("Idempotency hit! Returning cached transaction for key: {}", idempotencyKey);
-            return replay.get();
+            return requireSameRequest(replay.get(), source, dest, amount);
         }
 
         // 2. New request: run the transfer + record the key in one transaction, with a
@@ -73,12 +89,15 @@ public class IdempotentTransferService {
             try {
                 return executor.runTransferAndRecord(idempotencyKey, source, dest, amount);
 
-            } catch (DataIntegrityViolationException dup) {
-                // 3. Lost the duplicate-key race: a concurrent request with the SAME key
-                //    won the INSERT, so our transfer was rolled back (no double debit).
-                //    Recover by returning the winner's committed transaction.
+            } catch (DataIntegrityViolationException | InsufficientFundsException failure) {
+                // 3. Possibly lost the duplicate-key race: a concurrent request with the SAME
+                //    key won the INSERT (or drained the balance first), and our transfer was
+                //    rolled back (no double debit). If so, return the winner's committed
+                //    transaction; if the key was never recorded, the failure is genuine.
+                Transaction winner = executor.findRecordedTransaction(idempotencyKey)
+                        .orElseThrow(() -> failure);
                 log.info("Idempotency race detected for key {}; returning winner's transaction", idempotencyKey);
-                return executor.findRecordedTransaction(idempotencyKey);
+                return requireSameRequest(winner, source, dest, amount);
 
             } catch (OptimisticLockingFailureException ole) {
                 // 4. A @Version conflict escaped the pessimistic lock — retry the whole
@@ -90,6 +109,17 @@ public class IdempotentTransferService {
         }
         // Retries exhausted: surface as a coherent conflict (409), not a raw 500.
         throw lastLockFailure;
+    }
+
+    private static Transaction requireSameRequest(Transaction recorded, UUID source, UUID dest, BigDecimal amount) {
+        boolean same = recorded.getSourceAccountId().equals(source)
+                && recorded.getDestinationAccountId().equals(dest)
+                && recorded.getAmount().compareTo(amount) == 0;
+        if (!same) {
+            throw new IdempotencyKeyReusedException(
+                    "Idempotency-Key was already used for a different transfer request");
+        }
+        return recorded;
     }
 
     /**

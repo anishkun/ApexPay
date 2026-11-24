@@ -5,6 +5,7 @@ import com.example.ApexPay.enums.AuditAction;
 import com.example.ApexPay.enums.TransactionStatus;
 import com.example.ApexPay.event.TransactionSuccessEvent;
 import com.example.ApexPay.exception.AccountNotFoundException;
+import com.example.ApexPay.exception.CurrencyMismatchException;
 import com.example.ApexPay.exception.InsufficientFundsException;
 import com.example.ApexPay.repository.AccountRepository;
 import com.example.ApexPay.repository.AuditLogRepository;
@@ -73,7 +74,11 @@ public class TransferService {
         Account source = sourceId.equals(firstLockId) ? firstAccount : secondAccount;
         Account destination = destinationId.equals(firstLockId) ? firstAccount : secondAccount;
 
-        // 5. Verify Sufficient Funds
+        // 5. Verify Matching Currencies (there is no FX conversion) and Sufficient Funds
+        if (!source.getCurrency().equals(destination.getCurrency())) {
+            throw new CurrencyMismatchException("Cannot transfer from a " + source.getCurrency()
+                    + " account to a " + destination.getCurrency() + " account");
+        }
         if (source.getBalance().compareTo(amount) < 0) {
             throw new InsufficientFundsException("Insufficient funds in the source account");
         }

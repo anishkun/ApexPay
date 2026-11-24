@@ -68,7 +68,7 @@ test datasource from H2 to the container Postgres. The containerized ITs are:
 
 | Integration test | What it proves |
 | ---------------- | -------------- |
-| `FlywayMigrationIntegrationTest` | `V1` + `V2` + `V3` migrations apply cleanly and `ddl-auto=validate` passes (entities match the migrated schema) |
+| `FlywayMigrationIntegrationTest` | `V1`–`V4` migrations apply cleanly, `ddl-auto=validate` passes (entities match the migrated schema), and `audit_logs` rejects `UPDATE`/`DELETE` |
 | `IdempotencyConcurrencyPostgresIntegrationTest` | 24 concurrent transfers on one `Idempotency-Key` produce **exactly one** debit (no double-spend) |
 | `OutboxRabbitIntegrationTest` | Full outbox → exchange → queue delivery with publisher confirms |
 | `ConsumerDlqRoutingIntegrationTest` | Poison messages exhaust listener retries and are dead-lettered to the consumer DLQ |
@@ -77,7 +77,7 @@ test datasource from H2 to the container Postgres. The containerized ITs are:
 > **Docker is required to run the FULL suite.** When no Docker daemon is reachable, the
 > Testcontainers ITs **self-skip cleanly** (the rest of the suite still runs green), so
 > `mvn test` never goes red purely because Docker is absent. With Docker present the whole
-> suite (59 tests) runs and the ITs above all execute.
+> suite (68 tests) runs and the ITs above all execute.
 
 Build a runnable jar with `mvn clean package` (jar lands in `target/`).
 
@@ -105,7 +105,8 @@ docker run -d --name apexpay-rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3.13-
 **Database connection & credentials.** The app connects to
 `jdbc:postgresql://localhost:5432/ApexDB`. All connection settings and credentials are read from
 environment variables (see `.env.example` for the full list) with local-dev defaults that match the
-Docker setup above — for a local run you only need to set `DB_PASSWORD`. No plaintext production
+Docker setup above — for a local run you only need to set `DB_PASSWORD`, `API_PASSWORD` and
+`ACTUATOR_PASSWORD` (the app refuses to start without the last two). No plaintext production
 secrets are committed; production deployments must override `DB_*` and `RABBITMQ_*` via the environment.
 
 | Env var | Default | Used for |
@@ -116,8 +117,8 @@ secrets are committed; production deployments must override `DB_*` and `RABBITMQ
 | `RABBITMQ_PORT` | `5672` | RabbitMQ broker port |
 | `RABBITMQ_USERNAME` | `guest` | RabbitMQ user (override for remote brokers) |
 | `RABBITMQ_PASSWORD` | `guest` | RabbitMQ password (override for remote brokers) |
-| `API_USER` / `API_PASSWORD` | `apiuser` / `changeit` | HTTP Basic credentials for `/api/v1/**` (`ROLE_USER`) — **override in prod** |
-| `ACTUATOR_USER` / `ACTUATOR_PASSWORD` | `ops` / `changeit` | HTTP Basic credentials for `/actuator/prometheus`, `/actuator/metrics/**` (`ROLE_ACTUATOR`) — **override in prod** |
+| `API_USER` / `API_PASSWORD` | `apiuser` / _(required)_ | HTTP Basic credentials for `/api/v1/**` (`ROLE_USER`) |
+| `ACTUATOR_USER` / `ACTUATOR_PASSWORD` | `ops` / _(required)_ | HTTP Basic credentials for `/actuator/prometheus`, `/actuator/metrics/**` (`ROLE_ACTUATOR`) |
 | `LOG_FORMAT` | `ecs` | Structured console log format (`ecs`/`logstash`/`gelf`, or empty for plain text) |
 | `TRACE_SAMPLING` | `0.1` | Fraction of requests sampled for distributed tracing (0.0–1.0) |
 | `TRACING_EXPORT_ENABLED` | `false` | Ship spans to an OTLP collector (`traceId`/`spanId` still appear in logs when off) |
@@ -127,23 +128,7 @@ On first boot **Flyway runs the migrations** in `src/main/resources/db/migration
 then validates its entity mappings against that schema (`ddl-auto=validate`). The schema is fully
 migration-driven — the app never auto-generates or alters tables.
 
-2. Configure Database Triggers (optional, for tamper-proofing)
-For a production-grade immutable audit trail, access the PostgreSQL instance and apply the
-trigger below. The application also enforces immutability at the code tier (no setters), so
-this step is optional for a local run:
-
-```text
-CREATE OR REPLACE FUNCTION prevent_audit_log_modification() RETURNS TRIGGER AS $$
-BEGIN
-    RAISE EXCEPTION 'Modifying or deleting records in the audit_logs table is strictly prohibited.';
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER enforce_append_only_audit_logs
-BEFORE UPDATE OR DELETE ON audit_logs
-FOR EACH ROW EXECUTE FUNCTION prevent_audit_log_modification();
-```
-3. Run the Application
+2. Run the Application
 
 ```sh
 mvn spring-boot:run
@@ -157,7 +142,7 @@ lands on the AI queue.
 
 > **Authentication.** All `/api/v1/**` endpoints require **HTTP Basic** auth as the API user
 > (`API_USER` / `API_PASSWORD`). Send an `Authorization: Basic <base64(user:pass)>` header (e.g.
-> `curl -u apiuser:changeit ...`). Unauthenticated calls get `401`. A payment is also traceable
+> `curl -u "apiuser:$API_PASSWORD" ...`). Unauthenticated calls get `401`. A payment is also traceable
 > end-to-end by passing an `X-Correlation-Id` header — it is echoed on the response and stamped
 > onto every log line and the outbound event.
 
@@ -183,7 +168,9 @@ Content-Type: application/json
 
 ### 2. Execute an Idempotent Transfer → `200 OK`
 Transfers funds safely between two accounts. If the `Idempotency-Key` has been seen before, the
-existing transaction is returned without deducting funds twice.
+existing transaction is returned without deducting funds twice. Reusing a key for a different
+source, destination or amount is rejected with `422`. Keys are limited to 100 characters, and both
+accounts must hold the same currency (there is no FX conversion).
 
 ```text
 POST /api/v1/transfers
@@ -217,12 +204,12 @@ Errors return a consistent JSON body with the appropriate HTTP status:
 
 | Status | When |
 | ------ | ---- |
-| `400 Bad Request` | Missing `Idempotency-Key` header or request-body validation failure (per-field detail in `fieldErrors`) |
+| `400 Bad Request` | Missing or over-long (> 100 chars) `Idempotency-Key` header, or request-body validation failure (per-field detail in `fieldErrors`) |
 | `401 Unauthorized` | Missing or invalid HTTP Basic credentials |
 | `403 Forbidden` | Authenticated but lacking the required role (e.g. an API user hitting `/actuator/prometheus`) |
 | `404 Not Found` | Unknown account or transaction |
 | `409 Conflict` | Concurrent optimistic-lock conflict after retries — safe to retry |
-| `422 Unprocessable Entity` | Insufficient funds in the source account |
+| `422 Unprocessable Entity` | Insufficient funds, mismatched account currencies, or an `Idempotency-Key` reused for a different request |
 
 ```json
 {
@@ -250,6 +237,7 @@ Versioned migrations live in `src/main/resources/db/migration/`:
 | `V1` | `V1__baseline_schema.sql` | The 5 baseline tables: `accounts`, `transactions`, `outbox_events`, `idempotency_records`, `audit_logs`. Authored to match exactly what the JPA entities map to (snake_case physical naming, Postgres dialect) so `validate` passes. |
 | `V2` | `V2__outbox_resilience.sql` | Adds the resilient-relay columns to `outbox_events` (`status`, `attempt_count`, `next_attempt_at`, `last_error`, `published_at`, `version`), the relay poll index `idx_outbox_events_relay (status, next_attempt_at, created_at)`, and backfills already-relayed rows (`processed = true` → `status = 'PUBLISHED'`). |
 | `V3` | `V3__outbox_correlation_id.sql` | Adds the nullable `correlation_id` column to `outbox_events` so the async relay can rejoin a payment's correlation/log trail after the outbox hop (the scheduler thread has no HTTP request context). |
+| `V4` | `V4__audit_log_append_only.sql` | Adds the trigger that makes `audit_logs` append-only by blocking `UPDATE` and `DELETE`. |
 
 Flyway support is provided by `flyway-core` plus `flyway-database-postgresql` (the latter is
 required for Postgres on modern Flyway).
@@ -327,8 +315,8 @@ are routed by the relay to the publish-failure DLX `apexpay.outbox.dlx` → DLQ 
 Authentication is **stateless HTTP Basic** (Spring Security). This is a headless service-to-service
 API, so there are no browser sessions or cookies: CSRF is disabled, no HTTP session is created, and
 every request re-authenticates via its `Authorization` header. Two in-memory users are seeded from
-environment variables and **BCrypt-encoded at startup** — no password hashes are committed, and the
-`changeit` defaults are for local/dev/test only and **must be overridden in production**.
+environment variables and **BCrypt-encoded at startup** — no password hashes are committed, and there
+are no default passwords: the app refuses to start unless both are set.
 
 | Role | User (env) | Grants access to |
 | ---- | ---------- | ---------------- |

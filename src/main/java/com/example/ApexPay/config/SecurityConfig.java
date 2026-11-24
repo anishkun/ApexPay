@@ -14,6 +14,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.util.Assert;
 
 /**
  * Locks down the payment API and sensitive Actuator endpoints while keeping the
@@ -25,10 +26,10 @@ import org.springframework.security.web.SecurityFilterChain;
  * -- CSRF only defends cookie/session-backed browser flows, which this API does not
  * have; every request re-authenticates via its Authorization header.
  *
- * <p>Credentials are supplied via environment variables with local/test-only
- * defaults (see .env.example). Plaintext from the environment is BCrypt-encoded at
- * startup; no password hashes are committed and passwords are never logged.
- * <b>Production MUST override the {@code API_*}/{@code ACTUATOR_*} defaults.</b>
+ * <p>Credentials are supplied via environment variables (see .env.example). Passwords
+ * have no default: the app refuses to start unless both are set. Plaintext from the
+ * environment is BCrypt-encoded at startup; no password hashes are committed and
+ * passwords are never logged.
  */
 @Configuration
 @EnableWebSecurity
@@ -41,9 +42,11 @@ public class SecurityConfig {
 
     public SecurityConfig(
             @Value("${API_USER:apiuser}") String apiUser,
-            @Value("${API_PASSWORD:changeit}") String apiPassword,
+            @Value("${API_PASSWORD:}") String apiPassword,
             @Value("${ACTUATOR_USER:ops}") String actuatorUser,
-            @Value("${ACTUATOR_PASSWORD:changeit}") String actuatorPassword) {
+            @Value("${ACTUATOR_PASSWORD:}") String actuatorPassword) {
+        Assert.hasText(apiPassword, "API_PASSWORD must be set");
+        Assert.hasText(actuatorPassword, "ACTUATOR_PASSWORD must be set");
         this.apiUser = apiUser;
         this.apiPassword = apiPassword;
         this.actuatorUser = actuatorUser;
